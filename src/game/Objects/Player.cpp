@@ -21466,6 +21466,158 @@ void Player::LearnDefaultSpells()
     }
 }
 
+void Player::learnClassLevelSpells(bool includeHighLevelQuestRewards)
+{
+    ChrClassesEntry const* clsEntry = sChrClassesStore.LookupEntry(GetClass());
+    if (!clsEntry)
+        return;
+
+    uint32 family = clsEntry->spellfamily;
+
+    // Special cases which are not sourced from trainers and normally require
+    // quests to obtain are added here for bot initialization convenience.
+    ObjectMgr::QuestMap const& questTemplates = sObjectMgr.GetQuestTemplates();
+    for (const auto& qTemplate : questTemplates)
+    {
+        Quest const* quest = qTemplate.second.get();
+        if (!quest)
+            continue;
+
+        if (quest->GetRequiredClasses() == 0 ||
+            !SatisfyQuestClass(quest, false) ||
+            !SatisfyQuestRace(quest, false) ||
+            !SatisfyQuestLevel(quest, false))
+            continue;
+
+        if (!includeHighLevelQuestRewards && quest->GetMinLevel() >= 60)
+            continue;
+
+        LearnQuestRewardedSpells(quest);
+    }
+
+    // Trainer spells are not guaranteed to be stored in rank order. Repeat
+    // until no new spell is learned so higher ranks can follow their previous
+    // ranks in a later pass.
+    bool learnedAnything;
+    do
+    {
+        learnedAnything = false;
+        for (const auto& creature : sObjectMgr.GetCreatureInfoMap())
+        {
+            CreatureInfo const* co = creature.second.get();
+            if (!co)
+                continue;
+
+            if (co->TrainerType != TRAINER_TYPE_CLASS || co->TrainerClass != GetClass())
+                continue;
+
+            uint32 trainerId = co->TrainerTemplateId;
+            if (!trainerId)
+                trainerId = co->Entry;
+
+            TrainerSpellData const* trainerSpells = sObjectMgr.GetNpcTrainerTemplateSpells(trainerId);
+            if (!trainerSpells)
+                trainerSpells = sObjectMgr.GetNpcTrainerSpells(trainerId);
+
+            if (!trainerSpells)
+                continue;
+
+            for (TrainerSpellMap::const_iterator itr = trainerSpells->spellList.begin(); itr != trainerSpells->spellList.end(); ++itr)
+            {
+                TrainerSpell const* trainerSpell = &itr->second;
+                uint32 reqLevel = 0;
+
+                if (!IsSpellFitByClassAndRace(trainerSpell->learnedSpell, &reqLevel))
+                    continue;
+
+                uint32 firstRank = sSpellMgr.GetFirstSpellInChain(trainerSpell->learnedSpell);
+                reqLevel = trainerSpell->isProvidedReqLevel ? trainerSpell->reqLevel : std::max(reqLevel, trainerSpell->reqLevel);
+                bool isValidTalent = GetTalentSpellCost(firstRank) && HasSpell(firstRank) && reqLevel <= GetLevel();
+
+                TrainerSpellState state = GetTrainerSpellState(trainerSpell, reqLevel);
+                if (state != TRAINER_SPELL_GREEN && !isValidTalent)
+                    continue;
+
+                SpellEntry const* proto = sSpellMgr.GetSpellEntry(trainerSpell->learnedSpell);
+                if (!proto)
+                    continue;
+
+                // Do not activate a lower rank when its successor is already known.
+                if (uint32 nextId = sSpellMgr.GetSpellBookSuccessorSpellId(proto->Id))
+                {
+                    if (HasSpell(nextId))
+                        continue;
+                }
+
+                // A few class-related skill lines contain spells outside the class
+                // spell family. Keep those, but ignore unrelated trainer data.
+                if (proto->SpellFamilyName != family)
+                {
+                    SkillLineAbilityMapBounds bounds = sSpellMgr.GetSkillLineAbilityMapBoundsBySpellId(trainerSpell->learnedSpell);
+                    if (bounds.first == bounds.second)
+                        continue;
+
+                    SkillLineAbilityEntry const* skillInfo = bounds.first->second;
+                    if (!skillInfo)
+                        continue;
+
+                    switch (skillInfo->skillId)
+                    {
+                        case SKILL_SUBTLETY:
+                        case SKILL_BEAST_MASTERY:
+                        case SKILL_SURVIVAL:
+                        case SKILL_DEFENSE:
+                        case SKILL_DUAL_WIELD:
+                        case SKILL_FERAL_COMBAT:
+                        case SKILL_PROTECTION:
+                        case SKILL_PLATE_MAIL:
+                        case SKILL_DEMONOLOGY:
+                        case SKILL_ENHANCEMENT:
+                        case SKILL_MAIL:
+                        case SKILL_HOLY2:
+                        case SKILL_LOCKPICKING:
+                            break;
+                        default:
+                            continue;
+                    }
+                }
+
+                if (!IsSpellFitByClassAndRace(trainerSpell->learnedSpell) ||
+                    !SpellMgr::IsSpellValid(proto, this, false))
+                    continue;
+
+                if (trainerSpell->learnedSpell)
+                {
+                    bool learnedSpell = false;
+                    for (uint32 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
+                    {
+                        uint32 learnedId = proto->EffectTriggerSpell[effect];
+                        if (proto->Effect[effect] == SPELL_EFFECT_LEARN_SPELL && learnedId)
+                        {
+                            if (!HasSpell(learnedId))
+                            {
+                                LearnSpell(learnedId, false);
+                                learnedAnything = true;
+                            }
+                            learnedSpell = true;
+                        }
+                    }
+
+                    if (!learnedSpell && !HasSpell(trainerSpell->learnedSpell))
+                    {
+                        LearnSpell(trainerSpell->learnedSpell, false);
+                        learnedAnything = true;
+                    }
+                }
+                else
+                {
+                    CastSpell(this, trainerSpell->spell, true);
+                }
+            }
+        }
+    } while (learnedAnything);
+}
+
 void Player::LearnQuestRewardedSpells(Quest const* quest)
 {
     uint32 spell_id = quest->GetRewSpellCast();

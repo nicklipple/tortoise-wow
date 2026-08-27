@@ -2571,9 +2571,9 @@ class Player final: public Unit
         uint32 GetFaction() const { return GetFactionTemplateId(); }
         // IsSitState: cmangos shorthand.
         bool IsSitState() const { return GetStandState() == UNIT_STAND_STATE_SIT; }
-        // learnClassLevelSpells / learnDefaultSpells: cmangos training helpers; Penqle has equivalents.
-        void learnClassLevelSpells(bool /*includeHighLevelQuestRewards*/ = false) {}
-        void learnDefaultSpells() {}
+        // cmangos training helpers used by the playerbot module.
+        void learnClassLevelSpells(bool includeHighLevelQuestRewards = false);
+        void learnDefaultSpells() { LearnDefaultSpells(); }
         // isGMVisible: cmangos shorthand for "GM is visible to others".
         bool isGMVisible() const { return !(m_ExtraFlags & PLAYER_EXTRA_GM_INVISIBLE); }
         // setCinematic: cmangos sets cinematic state. Stub no-op.
