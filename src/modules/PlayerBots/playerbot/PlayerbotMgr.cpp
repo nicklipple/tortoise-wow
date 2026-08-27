@@ -2416,6 +2416,7 @@ void PlayerbotHolder::CreateBot(Player* master, const std::string param, std::li
             newBot->InitTalentForLevel();
             newBot->InitPrimaryProfessions();
             newBot->learnDefaultSpells();
+            newBot->learnClassLevelSpells(true);
 
             std::ostringstream out;
             ChangeTalentsAction::AutoSelectTalents(newBot, &out, role);
