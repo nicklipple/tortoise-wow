@@ -5,6 +5,7 @@
 *.kate-swp
 *.exe
 /src/shared/revision.h
+migration-test-volumes/
 
 # Local backup copies made before editing (never meant to be committed)
 *.bak
