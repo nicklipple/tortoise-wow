@@ -53,13 +53,18 @@
 namespace
 {
     // Stage timeouts: a setup stage overrunning these is itself the failure.
-    constexpr uint32 SPAWN_TIMEOUT_MS = 60 * 1000;
+    // 180s, not 60: with ten groups cycling, up to fifty bot logins queue up
+    // at once and they all share one character-database queue. Sixty seconds
+    // was enough for a single group and turned into a stream of
+    // "bots did not finish logging in" setup failures under parallel load -
+    // the logins were not failing, just still in line.
+    constexpr uint32 SPAWN_TIMEOUT_MS = 180 * 1000;
     constexpr uint32 PROVISION_TIMEOUT_MS = 60 * 1000;
     constexpr uint32 GROUP_TIMEOUT_MS = 30 * 1000;
     // Covers BOTH teleport waves (leader, then the rest — see TickTeleporting),
     // and the stage clock does not restart between them.
     constexpr uint32 TELEPORT_TIMEOUT_MS = 45 * 1000;
-    constexpr uint32 START_TIMEOUT_MS = 20 * 1000;
+    constexpr uint32 START_TIMEOUT_MS = 60 * 1000;   // same reason as above
 
     constexpr uint32 MONITOR_STEP_MS = 1000;
 
@@ -852,6 +857,25 @@ void DcTestRunJob::TickProvisioning(bool& provisionBudget)
     // the run's lifetime (see RandomPlayerbotMgr::SetExternallyManaged).
     sRandomPlayerbotMgr.SetExternallyManaged(slot.guid.GetCounter(), true);
 
+    // FORCE the run's target level, both directions, BEFORE the factory.
+    // AiPlayerbot.DisableRandomLevels=1 (this server pins rotation levels)
+    // makes Randomize() skip its GiveLevel entirely, so provisioning kept
+    // whatever level the claimed bot happened to be - live: level 38-47
+    // bots breezing through a level-21 race leg (the who-list screenshot).
+    // Talents above the target are cleared on the way down; the premade
+    // spec path right below rebuilds them for the new level.
+    if (bot->GetLevel() != _level)
+    {
+        if (bot->GetLevel() > _level)
+            bot->resetTalents(true);
+        bot->GiveLevel(_level);
+        bot->InitTalentForLevel();
+        bot->SetUInt32Value(PLAYER_XP, 0);
+        LOG_INFO("playerbots.dungeonclear",
+                 "TESTRUN {} level-set: {} -> {}",
+                 _record.runId, bot->GetName(), _level);
+    }
+
     PlayerbotFactory factory(bot, _level, _gear.quality);
 
     // Strip the equipped set first. Randomize() only wipes items when
@@ -910,6 +934,16 @@ void DcTestRunJob::TickProvisioning(bool& provisionBudget)
     // class from the CURRENTLY equipped weapon, so calling it unconditionally is both
     // safe and the whole fix.
     factory.InitAmmo();
+
+    // PROVISIONS, for the same reason ammo is re-run above: StripEquipment
+    // empties the bags and the Randomize(false, ...) path never reaches
+    // InitFood, so every caster entered its run with nothing to drink. A
+    // level-21 healer then regenerates mana at natural rate - minutes - and
+    // the party's rest gate holds the WHOLE run there (live: 248s of
+    // "Waiting on X (low mana)" in front of Mr. Smite, run aborted at 4/8).
+    // InitFood is a no-op when the bags already carry food/drink, and skips
+    // drinks for classes without mana.
+    factory.AddFood();   // public wrapper for InitFood
 
     botAI->ResetStrategies();
 
@@ -1082,6 +1116,14 @@ void DcTestRunJob::TickGrouping()
             FailSetup("group creation failed");
             return;
         }
+        // Free-for-all loot for the whole run. Group loot opens roll windows
+        // on every green+ drop, and un-answered rolls keep the corpse
+        // lootable for every non-voter - each such corpse costs the party a
+        // camp timeout plus a loot-yield timeout (~30s standing still), and
+        // an at-level clear drops greens constantly (live: race leg 1 froze
+        // for minutes in a corpse-to-corpse give-up chain).
+        group->SetLootMethod(FREE_FOR_ALL);
+        group->SendUpdate();
         sObjectMgr.AddGroup(group);
         for (std::size_t i = 1; i < _slots.size(); ++i)
         {
@@ -1438,6 +1480,69 @@ void DcTestRunJob::SweepPartyGeometry()
                 }
 
                 {
+                    // DISTANCE FENCE, supervisor side. A member that ends up
+                    // far from the tank while still ON the dungeon map is
+                    // invisible to the geo fence above (that one only catches
+                    // bots who left the map) and the AI-side stranded
+                    // recovery loses the relevance race against the very
+                    // "waiting on X (out of range)" gate the stray causes -
+                    // live tr-20260824-135423-3: a dps died, was resurrected
+                    // at the ENTRANCE and stood there while the party waited
+                    // 300+ ticks 300yd deeper in. The supervisor cannot be
+                    // starved, so it owns the last-resort rescue: sustained
+                    // distance, nobody in combat, then teleport to the tank.
+                    if (Player* tank = ObjectAccessor::FindPlayer(_tankGuid))
+                    {
+                        uint32 const slotKey = slot.guid.GetCounter();
+                        uint32 const nowFar = getMSTime();
+                        bool far = false;
+                        // A combat FLAG is not a fight. Live: three resurrected
+                        // dps stood at the entrance 250yd from the party, all
+                        // flagged in combat with no victim at all, so the
+                        // original "nobody in combat" gate never let the fence
+                        // fire and the run bled out its whole window. Real
+                        // fighting (a live victim) still protects a member;
+                        // beyond 150yd even that is stale, because nothing the
+                        // party fights can be that far away.
+                        float const fenceDist = tank->GetDistance(bot);
+                        bool const reallyFighting =
+                            (bot->GetVictim() != nullptr || tank->GetVictim() != nullptr) &&
+                            fenceDist <= 150.0f;
+                        if (bot != tank && bot->IsAlive() && tank->IsAlive() &&
+                            !bot->IsBeingTeleported() && tank->FindMap() == botMap &&
+                            !reallyFighting && fenceDist > 120.0f)
+                        {
+                            far = true;
+                            uint32& since = _farSinceMs[slotKey];
+                            if (since == 0)
+                                since = nowFar ? nowFar : 1;
+                            else if (getMSTimeDiff(since, nowFar) > 45000)
+                            {
+                                // WALK, do not teleport. Moving a straggler to
+                                // the party skips ground it is supposed to
+                                // cover, and the recorder then captures that
+                                // jump as if it were a path. Order it to run
+                                // to the tank instead; if it cannot get
+                                // there, the run fails honestly.
+                                LOG_INFO("playerbots.dungeonclear",
+                                         "TESTRUN {} distance fence: {} is {}yd behind — sending it "
+                                         "running to the tank",
+                                         _record.runId, bot->GetName(),
+                                         int(tank->GetDistance(bot)));
+                                bot->GetMotionMaster()->Clear();
+                                bot->GetMotionMaster()->MovePoint(0, tank->GetPositionX(),
+                                                                  tank->GetPositionY(),
+                                                                  tank->GetPositionZ(),
+                                                                  FORCED_MOVEMENT_NONE, 0.0f, 0.0f,
+                                                                  /*generatePath*/ true, false);
+                                since = 0;
+                                continue;
+                            }
+                        }
+                        if (!far)
+                            _farSinceMs[slotKey] = 0;
+                    }
+
                     float const bz = bot->GetPositionZ();
                     // Boss-band rescue first (see the header note above).
                     if (bz > bossFloorZ + 25.0f)
