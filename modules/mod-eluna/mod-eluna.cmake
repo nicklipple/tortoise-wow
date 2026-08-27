@@ -1,6 +1,9 @@
 if(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "DISCOVERY")
   set(ELUNA_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/Eluna")
-  set(ELUNA_ADAPTER_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/src")
+
+  if(NOT IS_DIRECTORY "${ELUNA_SOURCE_DIR}")
+    message(FATAL_ERROR "mod-eluna requires the Eluna submodule at ${ELUNA_SOURCE_DIR}.")
+  endif()
 
   include(FetchContent)
   FetchContent_Declare(
@@ -30,27 +33,6 @@ if(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "DISCOVERY")
     target_compile_definitions(mod_eluna_lua PRIVATE _CRT_SECURE_NO_WARNINGS LUA_USE_WINDOWS)
   endif()
 
-  set(ELUNA_SOURCES
-    "${ELUNA_SOURCE_DIR}/LuaEngine.cpp"
-    "${ELUNA_SOURCE_DIR}/ElunaConfig.cpp"
-    "${ELUNA_SOURCE_DIR}/ElunaEventMgr.cpp"
-    "${ELUNA_SOURCE_DIR}/ElunaMgr.cpp"
-    "${ELUNA_SOURCE_DIR}/ElunaCompat.cpp"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/ElunaLoader.cpp"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/ElunaMethods.cpp"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/ElunaHooks.cpp"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/ElunaUtility.cpp"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/ElunaModule.cpp"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/ElunaModule.h"
-    "${ELUNA_ADAPTER_SOURCE_DIR}/TortoiseElunaIncludes.h")
-
-  foreach(ELUNA_SOURCE ${ELUNA_SOURCES})
-    TW_ADD_SCRIPT("${ELUNA_SOURCE}")
-  endforeach()
-
-  TW_ADD_SCRIPT("${ELUNA_SOURCE_DIR}/hooks/Hooks.h")
-  TW_ADD_SCRIPT("${ELUNA_SOURCE_DIR}/hooks/HookHelpers.h")
-
   CopyModuleConfig("${CMAKE_CURRENT_LIST_DIR}/conf/mod_eluna.conf.dist")
 elseif(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "POST_TARGETS")
   if(NOT TORTOISE_CURRENT_MODULE_LINKAGE STREQUAL "static")
@@ -58,21 +40,6 @@ elseif(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "POST_TARGETS")
   endif()
 
   target_link_libraries(modules PUBLIC mod_eluna_lua)
-  target_include_directories(modules PUBLIC
-    "${CMAKE_CURRENT_LIST_DIR}/Eluna"
-    "${CMAKE_CURRENT_LIST_DIR}/Eluna/hooks")
-
-  set_source_files_properties(${ELUNA_SOURCES}
-    PROPERTIES
-      COMPILE_DEFINITIONS "ELUNA_MANGOS;ELUNA_EXPANSION=0")
-
-  if(MSVC)
-    set_source_files_properties(${ELUNA_SOURCES}
-      PROPERTIES COMPILE_OPTIONS "/FI${CMAKE_CURRENT_LIST_DIR}/src/TortoiseElunaIncludes.h")
-  else()
-    set_source_files_properties(${ELUNA_SOURCES}
-      PROPERTIES COMPILE_OPTIONS "-include${CMAKE_CURRENT_LIST_DIR}/src/TortoiseElunaIncludes.h")
-  endif()
 
   add_custom_command(TARGET modules POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/lua_scripts"

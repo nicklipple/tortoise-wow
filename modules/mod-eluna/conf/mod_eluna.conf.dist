@@ -2,5 +2,5 @@
 
 # Eluna proof-of-concept settings.
 Eluna.Enabled = 1
-Eluna.ScriptPath = lua_scripts
+Eluna.ScriptPath = ../lua_scripts
 Eluna.TraceBack = 1
