@@ -461,7 +461,7 @@ struct TrainerSpell
     uint32 reqSkill;
     uint32 reqSkillValue;
     uint32 reqLevel;
-    // cmangos has isProvidedReqLevel flag; Penqle doesn't track it. Default false.
+    // True when reqLevel was explicitly provided by npc_trainer data.
     bool isProvidedReqLevel = false;
     // cmangos has conditionId; Penqle uses spell_template-side conditions. Stub 0.
     uint32 conditionId = 0;
