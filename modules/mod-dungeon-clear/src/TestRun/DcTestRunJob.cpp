@@ -53,13 +53,23 @@
 namespace
 {
     // Stage timeouts: a setup stage overrunning these is itself the failure.
-    constexpr uint32 SPAWN_TIMEOUT_MS = 60 * 1000;
-    constexpr uint32 PROVISION_TIMEOUT_MS = 60 * 1000;
+    // 180s, not 60: with ten groups cycling, up to fifty bot logins queue up
+    // at once and they all share one character-database queue. Sixty seconds
+    // was enough for a single group and turned into a stream of
+    // "bots did not finish logging in" setup failures under parallel load -
+    // the logins were not failing, just still in line.
+    constexpr uint32 SPAWN_TIMEOUT_MS = 180 * 1000;
+    // 180s, not 60. Provisioning gives every bot its level, talents, gear,
+    // food and ammo; under an AddressSanitizer build the whole server runs
+    // two to three times slower and six of eight groups timed out here at
+    // ~70s while doing nothing wrong. The window only bounds a setup that
+    // has genuinely wedged, so a generous one costs nothing.
+    constexpr uint32 PROVISION_TIMEOUT_MS = 180 * 1000;
     constexpr uint32 GROUP_TIMEOUT_MS = 30 * 1000;
     // Covers BOTH teleport waves (leader, then the rest — see TickTeleporting),
     // and the stage clock does not restart between them.
     constexpr uint32 TELEPORT_TIMEOUT_MS = 45 * 1000;
-    constexpr uint32 START_TIMEOUT_MS = 20 * 1000;
+    constexpr uint32 START_TIMEOUT_MS = 60 * 1000;   // same reason as above
 
     constexpr uint32 MONITOR_STEP_MS = 1000;
 
@@ -79,7 +89,13 @@ namespace
         static uint32 counter = 0;
         std::time_t const now = std::time(nullptr);
         std::tm tmBuf{};
+        // localtime_s nimmt (tm*, time_t*), localtime_r (time_t*, tm*) - die
+        // Reihenfolge ist vertauscht, ein #define-Alias waere hier falsch.
+#if defined(_MSC_VER)
+        localtime_s(&tmBuf, &now);
+#else
         localtime_r(&now, &tmBuf);
+#endif
         char buf[32];
         std::strftime(buf, sizeof(buf), "tr-%Y%m%d-%H%M%S", &tmBuf);
         return std::string(buf) + "-" + std::to_string(++counter);
@@ -239,8 +255,11 @@ void DcTestRunJob::ReassertMaster()
         // stock follow-master back. Re-strip it on the repair path exactly as
         // Grouping does, so a reinstated GM master can never start a bot jogging
         // toward the invisible driver parked outside the instance.
-        botAI->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
-        botAI->ChangeStrategy("-follow", BOT_STATE_COMBAT);
+        // NOT here: this runs in the world tick, and ChangeStrategy rebuilds
+        // the engine's trigger list under a bot that is walking it on its own
+        // map thread (two SIGSEGV in NextAction::clone). Hand it to the gate,
+        // which applies it in the bot's own update.
+        DcStrategyGate::RequestFollowStrip(bot->GetObjectGuid());
     }
 }
 
@@ -852,6 +871,25 @@ void DcTestRunJob::TickProvisioning(bool& provisionBudget)
     // the run's lifetime (see RandomPlayerbotMgr::SetExternallyManaged).
     sRandomPlayerbotMgr.SetExternallyManaged(slot.guid.GetCounter(), true);
 
+    // FORCE the run's target level, both directions, BEFORE the factory.
+    // AiPlayerbot.DisableRandomLevels=1 (this server pins rotation levels)
+    // makes Randomize() skip its GiveLevel entirely, so provisioning kept
+    // whatever level the claimed bot happened to be - live: level 38-47
+    // bots breezing through a level-21 race leg (the who-list screenshot).
+    // Talents above the target are cleared on the way down; the premade
+    // spec path right below rebuilds them for the new level.
+    if (bot->GetLevel() != _level)
+    {
+        if (bot->GetLevel() > _level)
+            bot->resetTalents(true);
+        bot->GiveLevel(_level);
+        bot->InitTalentForLevel();
+        bot->SetUInt32Value(PLAYER_XP, 0);
+        LOG_INFO("playerbots.dungeonclear",
+                 "TESTRUN {} level-set: {} -> {}",
+                 _record.runId, bot->GetName(), _level);
+    }
+
     PlayerbotFactory factory(bot, _level, _gear.quality);
 
     // Strip the equipped set first. Randomize() only wipes items when
@@ -911,7 +949,20 @@ void DcTestRunJob::TickProvisioning(bool& provisionBudget)
     // safe and the whole fix.
     factory.InitAmmo();
 
-    botAI->ResetStrategies();
+    // PROVISIONS, for the same reason ammo is re-run above: StripEquipment
+    // empties the bags and the Randomize(false, ...) path never reaches
+    // InitFood, so every caster entered its run with nothing to drink. A
+    // level-21 healer then regenerates mana at natural rate - minutes - and
+    // the party's rest gate holds the WHOLE run there (live: 248s of
+    // "Waiting on X (low mana)" in front of Mr. Smite, run aborted at 4/8).
+    // InitFood is a no-op when the bags already carry food/drink, and skips
+    // drinks for classes without mana.
+    factory.AddFood();   // public wrapper for InitFood
+
+    // Not inline: provisioning ticks in the world thread and this bot is
+    // already logged in and thinking on its map thread. ResetStrategies
+    // rebuilds the trigger list, which is what tore NextAction::clone apart.
+    DcStrategyGate::RequestStrategyReset(bot->GetObjectGuid());
 
     DcTestRunRecord::CompEntry entry;
     entry.name = bot->GetName();
@@ -1009,7 +1060,8 @@ void DcTestRunJob::TickProvisioningRoster()
             return;  // transient — retry next tick; the stage timeout bounds it
 
         UndoUnwantedGuild(bot, slot);
-        botAI->ResetStrategies();
+        // Same reason as in TickProvisioning: off the world thread.
+        DcStrategyGate::RequestStrategyReset(bot->GetObjectGuid());
 
         // What the character's talents actually say, next to what the human
         // marked it as. A wrong marking is human error at roster time and the run
@@ -1082,6 +1134,14 @@ void DcTestRunJob::TickGrouping()
             FailSetup("group creation failed");
             return;
         }
+        // Free-for-all loot for the whole run. Group loot opens roll windows
+        // on every green+ drop, and un-answered rolls keep the corpse
+        // lootable for every non-voter - each such corpse costs the party a
+        // camp timeout plus a loot-yield timeout (~30s standing still), and
+        // an at-level clear drops greens constantly (live: race leg 1 froze
+        // for minutes in a corpse-to-corpse give-up chain).
+        group->SetLootMethod(FREE_FOR_ALL);
+        group->SendUpdate();
         sObjectMgr.AddGroup(group);
         for (std::size_t i = 1; i < _slots.size(); ++i)
         {
@@ -1135,8 +1195,9 @@ void DcTestRunJob::TickGrouping()
                 {
                     if (gm)
                         botAI->SetMaster(gm);
-                    botAI->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
-                    botAI->ChangeStrategy("-follow", BOT_STATE_COMBAT);
+                    // Same reason as the repair path above: requested here,
+                    // carried out on the bot's own thread.
+                    DcStrategyGate::RequestFollowStrip(bot->GetObjectGuid());
                 }
 
         EnterStage(Stage::Teleporting);
@@ -1438,23 +1499,89 @@ void DcTestRunJob::SweepPartyGeometry()
                 }
 
                 {
+                    // DISTANCE FENCE, supervisor side. A member that ends up
+                    // far from the tank while still ON the dungeon map is
+                    // invisible to the geo fence above (that one only catches
+                    // bots who left the map) and the AI-side stranded
+                    // recovery loses the relevance race against the very
+                    // "waiting on X (out of range)" gate the stray causes -
+                    // live tr-20260824-135423-3: a dps died, was resurrected
+                    // at the ENTRANCE and stood there while the party waited
+                    // 300+ ticks 300yd deeper in. The supervisor cannot be
+                    // starved, so it owns the last-resort rescue: sustained
+                    // distance, nobody in combat, then teleport to the tank.
+                    if (Player* tank = ObjectAccessor::FindPlayer(_tankGuid))
+                    {
+                        uint32 const slotKey = slot.guid.GetCounter();
+                        uint32 const nowFar = getMSTime();
+                        bool far = false;
+                        // A combat FLAG is not a fight. Live: three resurrected
+                        // dps stood at the entrance 250yd from the party, all
+                        // flagged in combat with no victim at all, so the
+                        // original "nobody in combat" gate never let the fence
+                        // fire and the run bled out its whole window. Real
+                        // fighting (a live victim) still protects a member;
+                        // beyond 150yd even that is stale, because nothing the
+                        // party fights can be that far away.
+                        float const fenceDist = tank->GetDistance(bot);
+                        bool const reallyFighting =
+                            (bot->GetVictim() != nullptr || tank->GetVictim() != nullptr) &&
+                            fenceDist <= 150.0f;
+                        if (bot != tank && bot->IsAlive() && tank->IsAlive() &&
+                            !bot->IsBeingTeleported() && tank->FindMap() == botMap &&
+                            !reallyFighting && fenceDist > 120.0f)
+                        {
+                            far = true;
+                            uint32& since = _farSinceMs[slotKey];
+                            if (since == 0)
+                                since = nowFar ? nowFar : 1;
+                            else if (getMSTimeDiff(since, nowFar) > 45000)
+                            {
+                                // WALK, do not teleport. Moving a straggler to
+                                // the party skips ground it is supposed to
+                                // cover, and the recorder then captures that
+                                // jump as if it were a path. Order it to run
+                                // to the tank instead; if it cannot get
+                                // there, the run fails honestly.
+                                LOG_INFO("playerbots.dungeonclear",
+                                         "TESTRUN {} distance fence: {} is {}yd behind — sending it "
+                                         "running to the tank",
+                                         _record.runId, bot->GetName(),
+                                         int(tank->GetDistance(bot)));
+                                bot->GetMotionMaster()->Clear();
+                                bot->GetMotionMaster()->MovePoint(0, tank->GetPositionX(),
+                                                                  tank->GetPositionY(),
+                                                                  tank->GetPositionZ(),
+                                                                  FORCED_MOVEMENT_NONE, 0.0f, 0.0f,
+                                                                  /*generatePath*/ true, false);
+                                since = 0;
+                                continue;
+                            }
+                        }
+                        if (!far)
+                            _farSinceMs[slotKey] = 0;
+                    }
+
                     float const bz = bot->GetPositionZ();
                     // Boss-band rescue first (see the header note above).
-                    if (bz > bossFloorZ + 25.0f)
-                        LOG_INFO("playerbots.dungeonclear",
-                                 "TESTRUN {} deck-tripwire: {} bz={:.1f} bossZ={:.1f} haveFloor={} teleporting={}",
-                                 _record.runId, bot->GetName(), bz, bossFloorZ,
-                                 haveBossFloor ? 1 : 0, bot->IsBeingTeleported() ? 1 : 0);
-                    if (haveBossFloor && bz > bossFloorZ + 25.0f && !bot->IsBeingTeleported())
+                    //
+                    // 80 yards, not 25. The phantom deck sits ~200y over the
+                    // mine, but the mine ITSELF is 40y tall - Cookie stands at
+                    // Z 17, Rhahk'Zor at Z 54, and the custom Voss wing at Z 54
+                    // hangs 35y over Gilnid's foundry floor at Z 19. At 25y this
+                    // rescue therefore fired on parties that were exactly where
+                    // they belonged and dropped them a storey, 444 times in one
+                    // evening: a vertical teleport that skipped the climb and
+                    // wrote a jump into the route recording. The gap between
+                    // "wrong deck" and "other floor of the same mine" is what
+                    // the threshold has to name, and 80y names it.
+                    float const DECK_BAND = 80.0f;
+                    if (haveBossFloor && bz > bossFloorZ + DECK_BAND && !bot->IsBeingTeleported())
                     {
                         NavmeshSnap::Result const floorHit = NavmeshSnap::SnapColumn(
                             botMap, bot->GetPositionX(), bot->GetPositionY(),
                             bossFloorZ, /*halfHeight*/ 40.0f, /*radius*/ 8.0f);
-                        LOG_INFO("playerbots.dungeonclear",
-                                 "TESTRUN {} deck-tripwire: {} band snap ok={} hitZ={:.1f}",
-                                 _record.runId, bot->GetName(), floorHit.ok ? 1 : 0,
-                                 floorHit.ok ? floorHit.z : 0.0f);
-                        if (floorHit.ok && bz - floorHit.z > 25.0f)
+                        if (floorHit.ok && bz - floorHit.z > DECK_BAND)
                         {
                             bot->GetMotionMaster()->Clear();
                             bot->NearTeleportTo(floorHit.x, floorHit.y, floorHit.z,
@@ -1462,9 +1589,9 @@ void DcTestRunJob::SweepPartyGeometry()
                                                 /*casting*/ false, /*vehicle*/ false,
                                                 /*withPet*/ true);
                             LOG_INFO("playerbots.dungeonclear",
-                                     "TESTRUN {} altitude sanity: {} floor-banded {:.0f}y "
+                                     "TESTRUN {} altitude sanity: {} floor-banded {}y "
                                      "down off the phantom deck",
-                                     _record.runId, bot->GetName(), bz - floorHit.z);
+                                     _record.runId, bot->GetName(), int(bz - floorHit.z));
                             continue;
                         }
                     }
@@ -1478,8 +1605,8 @@ void DcTestRunJob::SweepPartyGeometry()
                                             /*casting*/ false, /*vehicle*/ false,
                                             /*withPet*/ true);
                         LOG_INFO("playerbots.dungeonclear",
-                                 "TESTRUN {} altitude sanity: {} column-snapped {:.0f}y onto the mesh",
-                                 _record.runId, bot->GetName(), std::fabs(column.z - bz));
+                                 "TESTRUN {} altitude sanity: {} column-snapped {}y onto the mesh",
+                                 _record.runId, bot->GetName(), int(std::fabs(column.z - bz)));
                     }
                 }
             }

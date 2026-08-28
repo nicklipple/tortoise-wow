@@ -4,8 +4,68 @@
  */
 
 #include "DungeonClearRouteRegistry.h"
+#include <mutex>
+#include "Config.h"
+#include <cstdio>
+#include <fstream>
+#include <filesystem>
+#include <system_error>
 
 #include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
+
+// Generated collector (routes/RecordedRoutes.cpp). Declared at file scope:
+// inside the anonymous namespace it would get internal linkage and never
+// find its definition.
+void RegisterAllRecordedRoutes();
+
+// Reads modules/mod-dungeon-clear/src/Routes/*.route (written by
+// DcRouteRecorder alongside its .cpp twin) and registers each one. This is
+// what makes a route usable after a plain restart instead of a rebuild.
+static void LoadRecordedRoutesFromDisk()
+{
+    std::string dir = sConfig.GetStringDefault("DungeonClear.RouteRecorderDir", "");
+    if (dir.empty())
+        return;
+
+    uint32 loaded = 0;
+    // std::filesystem statt dirent.h: MSVC kennt dirent nicht, und der
+    // Iterator spart den manuellen Endungsvergleich samt closedir.
+    std::error_code ec;
+    std::filesystem::directory_iterator it(dir, ec), ende;
+    if (!ec)
+    {
+        for (; it != ende; it.increment(ec))
+        {
+            if (ec)
+                break;
+            if (!it->is_regular_file(ec) || ec)
+                continue;
+            if (it->path().extension() != ".route")
+                continue;
+            std::ifstream in(it->path());
+            if (!in.is_open())
+                continue;
+            std::string header;
+            std::getline(in, header);
+            uint32 mapId = 0, bossEntry = 0;
+            if (std::sscanf(header.c_str(), "# map %u boss %u", &mapId, &bossEntry) != 2)
+                continue;
+            std::vector<WaypointHint> hints;
+            float x = 0.0f, y = 0.0f, z = 0.0f;
+            while (in >> x >> y >> z)
+                hints.push_back(WaypointHint{x, y, z, 0, 0, 6.0f});
+            if (hints.size() >= 3)
+            {
+                DungeonClearRouteRegistry::Register(mapId, DUNGEON_DIFFICULTY_NORMAL,
+                                                    bossEntry, std::move(hints));
+                ++loaded;
+            }
+        }
+    }
+    if (loaded)
+        LOG_INFO("playerbots.dungeonclear",
+                 "[DC-ROUTE] loaded {} recorded route(s) from {}", loaded, dir);
+}
 
 namespace
 {
@@ -25,10 +85,24 @@ namespace
         static bool const seeded = []
         {
             RegisterAzjolNerubRoute();
+            // Everything the route recorder captured from live clears (see
+            // modules/mod-dungeon-clear/routes/). Generated collector; a
+            // recorded route only becomes live once it is called from here.
+            RegisterAllRecordedRoutes();
+            // ...and then whatever the recorder has captured SINCE that build.
+            // Loaded last so a freshly recorded (and, by the recorder's own
+            // shortest-wins rule, better) route wins over the compiled one.
+            LoadRecordedRoutesFromDisk();
             return true;
         }();
         (void)seeded;
     }
+}
+
+std::mutex& DungeonClearRouteRegistry::RegistryLock()
+{
+    static std::mutex instance;
+    return instance;
 }
 
 std::unordered_map<DungeonClearRouteRegistry::Key, std::vector<WaypointHint>, DungeonClearRouteRegistry::KeyHash>&
@@ -41,20 +115,37 @@ DungeonClearRouteRegistry::Store()
 void DungeonClearRouteRegistry::Register(uint32 mapId, Difficulty difficulty, uint32 bossEntry,
                                          std::vector<WaypointHint> hints)
 {
+    std::lock_guard<std::mutex> lock(RegistryLock());
     Store()[Key{mapId, difficulty, bossEntry}] = std::move(hints);
 }
 
-std::vector<WaypointHint> const* DungeonClearRouteRegistry::Get(uint32 mapId, Difficulty difficulty, uint32 bossEntry)
+bool DungeonClearRouteRegistry::Forget(uint32 mapId, Difficulty difficulty, uint32 bossEntry)
 {
     SeedAuthoredRoutes();
-    auto const& s = Store();
-    auto it = s.find(Key{mapId, difficulty, bossEntry});
-    // Heroic shares the normal dungeon's geometry, and the hand-authored routes
-    // are registered under normal — fall back so a heroic run still gets its
-    // waypoint hints. A difficulty-specific row, when one exists, wins.
-    if (it == s.end() && difficulty != DUNGEON_DIFFICULTY_NORMAL)
-        it = s.find(Key{mapId, DUNGEON_DIFFICULTY_NORMAL, bossEntry});
-    if (it == s.end())
-        return nullptr;
-    return &it->second;
+    std::lock_guard<std::mutex> lock(RegistryLock());
+    return Store().erase(Key{mapId, difficulty, bossEntry}) > 0;
 }
+
+bool DungeonClearRouteRegistry::Has(uint32 mapId, Difficulty difficulty, uint32 bossEntry)
+{
+    // Seed BEFORE taking the lock: seeding registers, and Register() takes
+    // this same lock.
+    SeedAuthoredRoutes();
+    std::lock_guard<std::mutex> lock(RegistryLock());
+    auto const it = Store().find(Key{mapId, difficulty, bossEntry});
+    return it != Store().end() && !it->second.empty();
+}
+
+bool DungeonClearRouteRegistry::TryGet(uint32 mapId, Difficulty difficulty, uint32 bossEntry,
+                                       std::vector<WaypointHint>& out)
+{
+    // Same order as Has(): seed first, lock second.
+    SeedAuthoredRoutes();
+    std::lock_guard<std::mutex> lock(RegistryLock());
+    auto const it = Store().find(Key{mapId, difficulty, bossEntry});
+    if (it == Store().end() || it->second.empty())
+        return false;
+    out = it->second;
+    return true;
+}
+
