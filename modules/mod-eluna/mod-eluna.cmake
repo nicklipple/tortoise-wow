@@ -33,7 +33,16 @@ if(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "DISCOVERY")
     target_compile_definitions(mod_eluna_lua PRIVATE _CRT_SECURE_NO_WARNINGS LUA_USE_WINDOWS)
   endif()
 
-  CopyModuleConfig("${CMAKE_CURRENT_LIST_DIR}/conf/mod_eluna.conf.dist")
+  if(BUILD_TESTING)
+    include(CTest)
+    add_executable(mod_eluna_handle_tests EXCLUDE_FROM_ALL
+      "${CMAKE_CURRENT_LIST_DIR}/src/ElunaHandleRegistry.cpp"
+      "${CMAKE_CURRENT_LIST_DIR}/tests/ElunaHandleRegistryTest.cpp")
+    target_include_directories(mod_eluna_handle_tests PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/src")
+    set_target_properties(mod_eluna_handle_tests PROPERTIES FOLDER "modules/tests")
+    add_test(NAME mod_eluna_handle_tests COMMAND mod_eluna_handle_tests)
+  endif()
 elseif(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "POST_TARGETS")
   if(NOT TORTOISE_CURRENT_MODULE_LINKAGE STREQUAL "static")
     message(FATAL_ERROR "mod-eluna currently supports static linkage only.")

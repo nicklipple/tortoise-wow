@@ -30,19 +30,43 @@ These principles are the default decision rules for the work below:
 
 Check a phase only after all of its acceptance criteria are met. Keep implementation notes, compatibility decisions, and deferred items in the phase section where they belong.
 
-## Current Baseline
+## Current State
 
-The current implementation is a deliberately small native bridge in `src/ElunaModule.cpp`:
+The current implementation is a deliberately small native bridge split across
+the runtime, loader, callback registry, error reporter, bindings, and handle
+registry under `src/`:
 
-- Creates and destroys a Lua 5.1 state from Tortoise world startup/shutdown hooks.
-- Loads `.lua` files recursively from `Eluna.ScriptPath`.
-- Exposes `RegisterPlayerEvent(3, callback)` for player login.
-- Pushes a minimal `Player` userdata with `SendBroadcastMessage()`.
-- Logs script compile, execution, and callback errors.
-- Builds Lua as a position-independent static library and links `mod-eluna` statically.
-- Copies the proof-of-concept script into the build/install Lua directory.
+- Prepares the runtime during the core startup hook, then creates and owns one
+  Lua 5.1 state on the dedicated world thread. All Lua calls, callback
+  registration, and teardown are rejected outside that owner thread.
+- Loads `.lua` files recursively from `Eluna.ScriptPath` through
+  `Eluna::ScriptLoader`, with deterministic path ordering and per-script error
+  context.
+- Exposes `RegisterPlayerEvent(3, callback)` for player login through the
+  generic `Eluna::CallbackRegistry`; a later registration replaces and unrefs
+  the earlier callback, and shutdown clears every registry reference.
+- Pushes a `Player` userdata whose payload contains only a GUID, generation,
+  and wrapper type. The `Object` -> `WorldObject` -> `Unit` -> `Player`
+  metatable hierarchy is established without exposing unmanaged core objects.
+- Resolves a player handle on each native call through `ObjectAccessor`,
+  checking wrapper type, generation, GUID type, world membership, deletion
+  state, and GUID identity. Player generations are invalidated before logout,
+  on state teardown, and when a GUID is activated again.
+- Logs script compile, execution, and callback failures with both script and
+  callback context. Callback failures are consumed by `lua_pcall` and do not
+  unwind into Tortoise.
+- Defines the Phase 2 conversion boundary: checked Lua integers and strings,
+  strict function and boolean types, copied GUIDs/enums, nil only for
+  explicitly optional arguments, and validity-checked userdata for objects.
+- Builds Lua as a position-independent static library and links `mod-eluna`
+  statically. With `BUILD_TESTING=ON`, the standalone
+  `mod_eluna_handle_tests` target covers invalidation, generation changes, and
+  GUID reuse without requiring client data.
 
-The POC intentionally does not provide reload, timers, database queries, broad method registration, or the upstream Eluna engine. Its player userdata is also not a sufficient long-term lifetime model; safe handles are a prerequisite for expanding the public API.
+The POC intentionally does not provide reload, timers, database queries, broad
+method registration, multiple callbacks per event, or the upstream Eluna
+engine. Those remain later-phase work; the existing login callback and
+`Player:SendBroadcastMessage()` continue to be the only public script surface.
 
 The upstream inventory is large enough to require deliberate scope control:
 
@@ -103,7 +127,10 @@ requirements.
 
 ## Phase 2: Runtime Kernel and Safe Object Wrappers
 
-**Status: Not started.** Build the reusable foundation before adding many public methods.
+**Status: In progress.** The runtime foundation is split into focused
+components, owns Lua on the world thread, and uses generation-checked
+non-owning object handles. Broader event dispatch and public method expansion
+remain deferred to later phases.
 
 ### Scope
 
@@ -116,12 +143,19 @@ requirements.
 
 ### Acceptance Criteria
 
-- [ ] Existing login scripts work through the new runtime components without behavior changes.
-- [ ] A Lua callback error is logged with script and callback context and does not unwind into the core.
-- [ ] A retained or invalidated object handle returns a controlled Lua error or nil rather than dereferencing stale memory.
-- [ ] Wrapper destruction and Lua garbage collection never delete Tortoise-owned objects.
-- [ ] Callback registration can be removed during shutdown without invoking freed Lua functions.
-- [ ] Focused C++ or Lua regression coverage exercises invalid handles and repeated startup/shutdown where the test harness permits.
+- [x] Existing login scripts work through the new runtime components without behavior changes.
+- [x] A Lua callback error is logged with script and callback context and does not unwind into the core.
+- [x] A retained or invalidated object handle returns a controlled Lua error or nil rather than dereferencing stale memory.
+- [x] Wrapper destruction and Lua garbage collection never delete Tortoise-owned objects.
+- [x] Callback registration can be removed during shutdown without invoking freed Lua functions.
+- [x] Focused C++ regression coverage exercises invalid handles, generation changes, and repeated activation after invalidation; the standalone test target is available where the test harness permits.
+
+### Verification
+
+- [x] `git diff --check` passes for the implementation.
+- [x] `python3 -B modules/mod-eluna/tools/check_compatibility.py` continues to pass the Phase 1 catalog and POC regression guard.
+- [x] `make dev-eluna` compiles every current `modules/mod-eluna/src/*.cpp` source with the configured module flags.
+- [ ] The module-enabled out-of-source build and `mod_eluna_handle_tests` runtime check must be run by the user because repository guidance forbids autonomous build/test-build execution.
 
 ## Phase 3: Lifecycle, Callbacks, and Event Registry
 

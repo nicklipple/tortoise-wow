@@ -1,8 +1,9 @@
 # mod-eluna Compatibility Contract
 
-This is the Phase 1 compatibility contract for Turtle WoW client patch 1.18.1
+This is the compatibility contract for Turtle WoW client patch 1.18.1
 (build 7272) on the Tortoise core. It is an inventory and a set of rules for
-future implementation. It does not expand the runtime bridge.
+the deliberately small runtime bridge; it does not imply upstream Eluna
+parity.
 
 The upstream reference is the Eluna submodule at commit
 `58d7652138887783228b9727bd1fa4e08f00342b`. The upstream files are reference
@@ -30,12 +31,41 @@ The first public API set is intentionally limited to the existing POC:
 | Public name | Contract | Tortoise owner and dispatch |
 | --- | --- | --- |
 | `RegisterPlayerEvent(3, callback)` | Registers the login notification using upstream event ID 3. The current POC stores one callback; a later registration replaces it. The callback receives `(3, player)`. Its return values are ignored. | `PlayerScript::OnLogin(Player*)`, dispatched by `src/game/Handlers/CharacterHandler.cpp:1114-1125`. |
-| `Player:SendBroadcastMessage(message)` | Sends a system message when the borrowed player has a live session. It returns no value. Empty messages are ignored by the POC. | `ChatHandler(handle->player->GetSession()).SendSysMessage(message)` in `modules/mod-eluna/src/ElunaModule.cpp:213-219`. |
+| `Player:SendBroadcastMessage(message)` | Sends a system message when the validity-checked player handle resolves to a player with a live session. It returns no value. Empty messages are ignored by the POC. An invalid or stale handle raises a controlled Lua error. | `ChatHandler(player->GetSession()).SendSysMessage(message)` in `modules/mod-eluna/src/ElunaBindings.cpp:87-101`, after `ElunaRuntime::ResolvePlayer`. |
 
 The login callback is synchronous on the world thread. The `player` userdata
-is borrowed for the callback; the POC currently stores a raw `Player*`, which
-is a known Phase 2 lifetime defect. Scripts must not retain or use it after the
-callback returns. No other object method or global function is supported.
+contains only the player's GUID, a runtime generation, and the `Player` wrapper
+type. Each native method resolves the GUID again through `ObjectAccessor` and
+checks the generation, deletion state, world membership, and GUID identity.
+`PlayerScript::OnBeforeLogout` invalidates the generation before core logout
+cleanup, and runtime teardown invalidates every generation. Scripts may retain
+the userdata, but using it after logout, GUID reuse, state teardown, or another
+invalidating transition raises a controlled Lua error. No other object method
+or global function is supported.
+
+## Runtime Kernel Rules
+
+- The `WorldScript::OnStartup` hook only prepares the runtime object because
+  Tortoise invokes that hook on `MainThread`. Lua state creation is deferred to
+  the first `PlayerScript` login or `WorldScript` update on `WorldThread`.
+- One runtime owns one Lua state. Lua API calls, callback registration,
+  callback dispatch, handle resolution, and state teardown must run on that
+  owner thread. A non-owner attempt is logged and rejected; no Lua state is
+  shared with map, socket, or worker threads.
+- `Object`, `WorldObject`, `Unit`, and `Player` are represented by a Lua
+  metatable hierarchy. The current public value is a `Player` wrapper; base
+  wrappers are established for later phases but have no public constructors or
+  methods yet.
+- Wrapper userdata is Lua-owned storage with a no-op-to-Tortoise destructor.
+  Its payload has no unmanaged Tortoise pointer. Lua garbage collection frees
+  only the wrapper storage.
+- Integer and enum inputs use checked Lua integer conversion and native range
+  validation. Strings use checked Lua strings and are copied before entering
+  native code. Boolean inputs must be Lua booleans. GUIDs are copied into
+  opaque handle metadata rather than accepted as lossy Lua 5.1 numbers.
+- Nil is accepted only by a binding that explicitly documents an optional
+  argument. Required objects must be the expected userdata type and must pass
+  the runtime validity check before native dereference.
 
 ## Lifetime, Thread, and Error Rules
 
