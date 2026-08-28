@@ -2,6 +2,7 @@
 /samples/
 /data/
 /build/
+/build-eluna/
 /.vscode/
 *.kate-swp
 *.exe
