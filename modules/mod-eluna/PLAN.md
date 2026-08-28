@@ -18,7 +18,7 @@ These principles are the default decision rules for the work below:
 ## Status Tracker
 
 - [x] Phase 0: Build integration and Lua login POC
-- [ ] Phase 1: Compatibility contract and API inventory
+- [x] Phase 1: Compatibility contract and API inventory
 - [ ] Phase 2: Runtime kernel and safe object wrappers
 - [ ] Phase 3: Lifecycle, callbacks, and event registry
 - [ ] Phase 4: Player vertical slice
@@ -73,7 +73,11 @@ The upstream inventory is large enough to require deliberate scope control:
 
 ## Phase 1: Compatibility Contract and API Inventory
 
-**Status: Not started.** The high-level inventory is available, but the compatibility contract is not yet recorded in code or tests.
+**Status: Complete.** `COMPATIBILITY.md` records the Tortoise compatibility contract,
+the full upstream event catalog, registration-category dispatch matrix, and the
+VMangos method inventory. `tools/check_compatibility.py` verifies the catalog,
+category coverage, method-header coverage, supported POC surface, and regression
+requirements.
 
 ### Scope
 
@@ -85,12 +89,17 @@ The upstream inventory is large enough to require deliberate scope control:
 
 ### Acceptance Criteria
 
-- [ ] A compatibility matrix lists every planned event category and its Tortoise dispatch point.
-- [ ] The first supported API set is explicitly listed; unsupported upstream APIs are not implied to work.
-- [ ] Each planned binding identifies its owning Tortoise type and lifetime rules.
-- [ ] Return-value and cancellation semantics are documented for notification and filter hooks.
-- [ ] The matrix distinguishes `methods/VMangos` reference code from code that is safe to reuse directly.
-- [ ] The POC behavior and public names are recorded as regression requirements.
+- [x] A compatibility matrix lists every planned event category and its Tortoise dispatch point.
+- [x] The first supported API set is explicitly listed; unsupported upstream APIs are not implied to work.
+- [x] Each planned binding identifies its owning Tortoise type and lifetime rules.
+- [x] Return-value and cancellation semantics are documented for notification and filter hooks.
+- [x] The matrix distinguishes `methods/VMangos` reference code from code that is safe to reuse directly.
+- [x] The POC behavior and public names are recorded as regression requirements.
+
+### Verification
+
+- [x] `python3 -B modules/mod-eluna/tools/check_compatibility.py` passes with all 195 upstream event rows covered.
+- [x] The standard module-enabled out-of-source build was run and passed by the user.
 
 ## Phase 2: Runtime Kernel and Safe Object Wrappers
 
