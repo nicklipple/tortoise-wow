@@ -126,6 +126,7 @@ public:
     uint32 autoGearQualityLimit = 0;  // like autoGearScoreLimit: 0 = no cap (mod-dungeon-clear reads it for its test sidecar)
     bool allowGuildBots;
     bool allowMultiAccountAltBots;
+    bool allowOwnAccountAltBots;
     uint32 globalCoolDown, reactDelay, maxWaitForMove, expireActionTime, dispelAuraDuration, passiveDelay, repeatDelay,
         errorDelay, rpgDelay, sitDelay, returnDelay, lootDelay;
     float sightDistance, spellDistance, reactDistance, grindDistance, lootDistance, groupMemberLootDistance, groupMemberLootDistanceWithActiveMaster,
@@ -484,4 +485,3 @@ private:
 };
 
 #define sPlayerbotAIConfig MaNGOS::Singleton<PlayerbotAIConfig>::Instance()
-

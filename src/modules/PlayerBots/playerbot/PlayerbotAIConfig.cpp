@@ -227,6 +227,7 @@ bool PlayerbotAIConfig::Initialize()
 
     allowGuildBots = config.GetBoolDefault("AiPlayerbot.AllowGuildBots", true);
     allowMultiAccountAltBots = config.GetBoolDefault("AiPlayerbot.AllowMultiAccountAltBots", true);
+    allowOwnAccountAltBots = config.GetBoolDefault("AiPlayerbot.AllowOwnAccountAltBots", true);
 
     randomBotMapsAsString = config.GetStringDefault("AiPlayerbot.RandomBotMaps", "0,1,530,571");
     LoadList<std::vector<uint32> >(randomBotMapsAsString, randomBotMaps);
