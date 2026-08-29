@@ -40,8 +40,6 @@
 #include "Chat.h"
 #include "CharacterDatabaseCache.h"
 
-#include <algorithm>
-
 enum StableResultCode
 {
     STABLE_ERR_MONEY        = 0x01,                         // "you don't have enough money"
@@ -116,8 +114,17 @@ void WorldSession::HandleTrainerListOpcode(WorldPacket & recv_data)
     SendTrainerList(guid);
 }
 
-static void SendTrainerSpellHelper(WorldPacket& data, TrainerSpell const* tSpell, uint32 triggerSpell, TrainerSpellState state, float fDiscountMod, bool can_learn_primary_prof, uint32 reqLevel)
+static void SendTrainerSpellHelper(WorldPacket& data, TrainerSpell const* tSpell, uint32 triggerSpell, TrainerSpellState state, float fDiscountMod, bool can_learn_primary_prof)
 {
+    SpellEntry const *triggerInfo = sSpellMgr.GetSpellEntry(triggerSpell);
+    uint32 spellLevel = 0;
+    if (tSpell->reqLevel)
+        spellLevel = tSpell->reqLevel;
+    else if (triggerInfo)
+        spellLevel = triggerInfo->spellLevel;
+    else
+        return;
+
     bool primary_prof_first_rank = sSpellMgr.IsPrimaryProfessionFirstRankSpell(triggerSpell);
 
     SpellChainNode const* chain_node = sSpellMgr.GetSpellChainNode(triggerSpell);
@@ -129,7 +136,7 @@ static void SendTrainerSpellHelper(WorldPacket& data, TrainerSpell const* tSpell
     data << uint32(primary_prof_first_rank && can_learn_primary_prof ? 1 : 0);
     // primary prof. learn confirmation dialog
     data << uint32(primary_prof_first_rank ? 1 : 0);    // must be equal prev. field to have learn button in enabled state
-    data << uint8(reqLevel);
+    data << uint8(spellLevel);
     data << uint32(tSpell->reqSkill);
     data << uint32(tSpell->reqSkillValue);
     // Nostalrius: le client veut spellreq1, spellreq2 avec spellreq2 != 0 seulement si spellreq1 != 0.
@@ -219,14 +226,12 @@ void WorldSession::SendTrainerList(ObjectGuid guid)
 
             uint32 triggerSpell = sSpellMgr.GetSpellEntry(tSpell->spell)->EffectTriggerSpell[0];
 
-            uint32 reqLevel = 0;
-            if (!_player->IsSpellFitByClassAndRace(triggerSpell, &reqLevel))
+            if (!_player->IsSpellFitByClassAndRace(triggerSpell))
                 continue;
 
-            reqLevel = tSpell->isProvidedReqLevel ? tSpell->reqLevel : std::max(reqLevel, tSpell->reqLevel);
-            TrainerSpellState state = _player->GetTrainerSpellState(tSpell, reqLevel);
+            TrainerSpellState state = _player->GetTrainerSpellState(tSpell);
 
-            SendTrainerSpellHelper(data, tSpell, triggerSpell, state, fDiscountMod, can_learn_primary_prof, reqLevel);
+            SendTrainerSpellHelper(data, tSpell, triggerSpell, state, fDiscountMod, can_learn_primary_prof);
 
             ++count;
         }
@@ -240,14 +245,12 @@ void WorldSession::SendTrainerList(ObjectGuid guid)
 
             uint32 triggerSpell = sSpellMgr.GetSpellEntry(tSpell->spell)->EffectTriggerSpell[0];
 
-            uint32 reqLevel = 0;
-            if (!_player->IsSpellFitByClassAndRace(triggerSpell, &reqLevel))
+            if (!_player->IsSpellFitByClassAndRace(triggerSpell))
                 continue;
 
-            reqLevel = tSpell->isProvidedReqLevel ? tSpell->reqLevel : std::max(reqLevel, tSpell->reqLevel);
-            TrainerSpellState state = _player->GetTrainerSpellState(tSpell, reqLevel);
+            TrainerSpellState state = _player->GetTrainerSpellState(tSpell);
 
-            SendTrainerSpellHelper(data, tSpell, triggerSpell, state, fDiscountMod, can_learn_primary_prof, reqLevel);
+            SendTrainerSpellHelper(data, tSpell, triggerSpell, state, fDiscountMod, can_learn_primary_prof);
 
             ++count;
         }
@@ -318,20 +321,13 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPacket & recv_data)
     }
     
     // Can't be learned, cheat? Or double learn with lags...
-    uint32 reqLevel = 0;
-    SpellEntry const* proto = sSpellMgr.GetSpellEntry(trainer_spell->spell);
-    if (!proto || !_player->IsSpellFitByClassAndRace(proto->EffectTriggerSpell[0], &reqLevel))
+    if (_player->GetTrainerSpellState(trainer_spell) != TRAINER_SPELL_GREEN)
     {
         SendTrainingFailure(guid, spellId, TRAIN_FAIL_NOT_ENOUGH_SKILL);
         return;
     }
 
-    reqLevel = trainer_spell->isProvidedReqLevel ? trainer_spell->reqLevel : std::max(reqLevel, trainer_spell->reqLevel);
-    if (_player->GetTrainerSpellState(trainer_spell, reqLevel) != TRAINER_SPELL_GREEN)
-    {
-        SendTrainingFailure(guid, spellId, TRAIN_FAIL_NOT_ENOUGH_SKILL);
-        return;
-    }
+    SpellEntry const *proto = sSpellMgr.GetSpellEntry(trainer_spell->spell);
 
     // Apply reputation discount.
     uint32 nSpellCost = uint32(floor(trainer_spell->spellCost * _player->GetReputationPriceDiscount(unit)));

@@ -8154,7 +8154,6 @@ void ObjectMgr::LoadTrainers(char const* tableName, bool isTemplates)
         trainerSpell.reqSkill      = fields[3].GetUInt32();
         trainerSpell.reqSkillValue = fields[4].GetUInt32();
         trainerSpell.reqLevel      = fields[5].GetUInt32();
-        trainerSpell.isProvidedReqLevel = trainerSpell.reqLevel > 0;
 
         if (trainerSpell.reqLevel)
         {
