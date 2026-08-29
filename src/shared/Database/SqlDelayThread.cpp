@@ -24,7 +24,7 @@
 #include "DatabaseEnv.h"
 
 SqlDelayThread::SqlDelayThread(const char* InName, Database* db, SqlConnection* conn)
-    : m_dbEngine(db), m_dbConnection(conn), m_running(true), Name(InName ? InName : "")
+    : m_dbEngine(db), m_dbConnection(conn), m_running(true), Name(InName)
 {
 }
 
@@ -52,11 +52,7 @@ void SqlDelayThread::run()
     #endif
 
     char ThreadName[128];
-    // snprintf, not sprintf: the source used to be a dangling pointer, so
-    // whether this overflowed came down to where the next zero byte happened
-    // to sit in a reused stack frame. The name is owned now, but a bounded
-    // write costs nothing and closes the door.
-    snprintf(ThreadName, sizeof(ThreadName), "SqlDelay %s", Name.c_str());
+    sprintf(ThreadName, "SqlDelay %s", Name);
 
     thread_name(ThreadName);
     const uint32 loopSleepms = 10;

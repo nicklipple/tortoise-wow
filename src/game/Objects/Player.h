@@ -872,13 +872,7 @@ struct InstancePlayerBind
     InstancePlayerBind() : state(nullptr), perm(false) {}
 };
 
-// Anti-farm gate from vanilla, compile-time (there is no config key for it -
-// AccountInstancesPerHour in mangosd.conf does nothing). Raised for this
-// server because the dungeon-clear test harness runs several bot groups
-// through the same instance in parallel and five entries per account per hour
-// stops the whole rig within minutes. Real players are unaffected at this
-// value; the gate still exists.
-static constexpr uint8 MAX_INSTANCE_PER_ACCOUNT_PER_HOUR = 100;
+static constexpr uint8 MAX_INSTANCE_PER_ACCOUNT_PER_HOUR = 5;
 
 struct ResurrectionData
 {

@@ -46,8 +46,6 @@
 #include "ScriptMgr.h"
 #include "Ai/Dungeon/DungeonClear/Data/BossSpawnIndex.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcEncounterMask.h"
-#include "Ai/Dungeon/DungeonClear/Util/DcRouteRecorder.h"
-#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
 #include "AllCreatureScript.h"
 #include "Cell.h"
 #include "CellImpl.h"
@@ -176,39 +174,6 @@ public:
     }
 };
 
-// Strategy gate + route sampling, on the bot's OWN thread.
-//
-// Both used to run in the world tick over every online player. Sampling was
-// harmless (it only reads a position), but the gate calls ChangeStrategy, and
-// doing that from the world thread while the bot's map thread is inside its AI
-// tick tears the trigger list apart underneath it: NextAction::clone then
-// copies a string that is being rebuilt, and the server aborts. That is the
-// crash signature we hit twice within a minute once ten groups were running
-// (Engine::ProcessTriggers -> TriggerNode::getHandlers -> NextAction::clone).
-//
-// PLAYERHOOK_ON_UPDATE fires from Player::Update, i.e. on the map thread that
-// owns this bot - the same thread its AI runs on. Same work, no second thread.
-class DungeonClearGateScript : public PlayerScript
-{
-public:
-    DungeonClearGateScript()
-        : PlayerScript("DungeonClearGateScript", {
-            PLAYERHOOK_ON_UPDATE
-        }) {}
-
-    void OnUpdate(Player* player, uint32 /*p_time*/) override
-    {
-        if (!player)
-            return;
-        PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
-        if (!ai)
-            return;                      // real players are not gated
-        DcStrategyGate::Reconcile(player);
-        if (DcRun::Of(ai).enabled)
-            DcRouteRecorder::Sample(player);
-    }
-};
-
 class DungeonClearRegistrarWorldScript : public WorldScript
 {
 public:
@@ -240,7 +205,6 @@ public:
         // map threads only run inside sMapMgr->Update, never concurrently with
         // this world-thread hook.
         new DungeonClearSpectatorMoverEndScript();
-        new DungeonClearGateScript();
 
         // The dashboard's test-plan start form needs the dungeon catalogue +
         // caps; publish them once the config is final (first world tick).
@@ -499,14 +463,7 @@ public:
         if (_gateSweepAccumMs >= DC_STRATEGY_GATE_SWEEP_MS)
         {
             _gateSweepAccumMs = 0;
-            // Der Strategie-Abgleich sitzt NICHT mehr hier: siehe
-            // DungeonClearGateScript. Ein Welt-Tick, der ChangeStrategy auf
-            // Bots ruft, die gerade auf ihrem Karten-Thread denken, zerlegt
-            // deren Auslöserliste (zwei SIGABRT unter Zehn-Gruppen-Last).
-
-
-            // Die Routen-Abtastung liegt ebenfalls im Spieler-Haken.
-
+            DcStrategyGate::ReconcileAllBots();
         }
     }
 
@@ -596,11 +553,6 @@ public:
             if (info.entry == unit->GetEntry())
             {
                 DcEncounterMask::OnBossKilled(map, info.encounterIndex);
-                // Close the recorder's leg for this boss: the path the party
-                // just walked becomes a registered anchor route (repo content
-                // under modules/mod-dungeon-clear/routes/) instead of being
-                // recomputed from the navmesh on every future run.
-                DcRouteRecorder::OnBossKilled(map, info.entry, info.name);
                 LOG_INFO("playerbots.dungeonclear",
                          "[DC] boss down: {} (entry {}) — encounter bit {} set for instance {}",
                          info.name, info.entry, info.encounterIndex, map->GetInstanceId());

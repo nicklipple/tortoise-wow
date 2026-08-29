@@ -4,7 +4,6 @@
  */
 
 #include "DcFollowerLifecycle.h"
-#include "DcStrategyGate.h"
 
 #include "DungeonClearUtil.h"   // DC_PULL_* log macros
 
@@ -276,14 +275,14 @@ void DcFollowerLifecycle::ApplyFollowerPassive(Player* follower)
         {
             if (botAI->HasStrategy("follow", BOT_STATE_COMBAT))
                 followEvicted |= 0x1;
-            DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "+stay", static_cast<uint8>(BOT_STATE_COMBAT));
+            botAI->ChangeStrategy("+stay", BOT_STATE_COMBAT);
             added |= 0x1;
         }
         if (!botAI->HasStrategy("stay", BOT_STATE_NON_COMBAT))
         {
             if (botAI->HasStrategy("follow", BOT_STATE_NON_COMBAT))
                 followEvicted |= 0x2;
-            DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "+stay", static_cast<uint8>(BOT_STATE_NON_COMBAT));
+            botAI->ChangeStrategy("+stay", BOT_STATE_NON_COMBAT);
             added |= 0x2;
         }
         {
@@ -309,7 +308,7 @@ void DcFollowerLifecycle::ApplyFollowerPassive(Player* follower)
     if (botAI->HasStrategy("passive", BOT_STATE_COMBAT))
         return;
 
-    DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "+passive", static_cast<uint8>(BOT_STATE_COMBAT));
+    botAI->ChangeStrategy("+passive", BOT_STATE_COMBAT);
     if (Pet* pet = follower->GetPet())
         pet->SetReactState(REACT_PASSIVE);
 
@@ -366,25 +365,25 @@ void DcFollowerLifecycle::RemoveFollowerPassive(Player* follower)
         if (isHealerStay)
         {
             if ((healerStay & 0x1) && botAI->HasStrategy("stay", BOT_STATE_COMBAT))
-                DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "-stay", static_cast<uint8>(BOT_STATE_COMBAT));
+                botAI->ChangeStrategy("-stay", BOT_STATE_COMBAT);
             if ((healerStay & 0x2) && botAI->HasStrategy("stay", BOT_STATE_NON_COMBAT))
-                DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "-stay", static_cast<uint8>(BOT_STATE_NON_COMBAT));
+                botAI->ChangeStrategy("-stay", BOT_STATE_NON_COMBAT);
             // Restore the "follow" strategy our `+stay` evicted (sibling removal in
             // Engine::addStrategy). Without this the healer keeps no movement
             // strategy in its non-combat engine and just stands there once the run
             // ends / `dc off` — the "healer stuck in stay" bug. Guard on HasStrategy
             // so we never double-add if something re-installed it meanwhile.
             if ((followRestore & 0x1) && !botAI->HasStrategy("follow", BOT_STATE_COMBAT))
-                DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "+follow", static_cast<uint8>(BOT_STATE_COMBAT));
+                botAI->ChangeStrategy("+follow", BOT_STATE_COMBAT);
             if ((followRestore & 0x2) && !botAI->HasStrategy("follow", BOT_STATE_NON_COMBAT))
-                DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "+follow", static_cast<uint8>(BOT_STATE_NON_COMBAT));
+                botAI->ChangeStrategy("+follow", BOT_STATE_NON_COMBAT);
             DC_PULL_DEBUG("[DC:{}] advanced-pull: healer released (stay cleared, "
                           "follow restored: {})", follower->GetName(), followRestore);
             return;
         }
 
         if (botAI->HasStrategy("passive", BOT_STATE_COMBAT))
-            DcStrategyGate::RequestStrategy(botAI->GetBot()->GetObjectGuid(), "-passive", static_cast<uint8>(BOT_STATE_COMBAT));
+            botAI->ChangeStrategy("-passive", BOT_STATE_COMBAT);
 
         // Hold the pet passive a little longer than its owner: releasing them in
         // lockstep lets the pet bolt in and pull aggro off the tank before he's
