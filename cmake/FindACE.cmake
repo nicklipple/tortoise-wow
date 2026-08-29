@@ -14,10 +14,29 @@ set(ACE_FOUND 0)
 
 if (UNIX)
 
+    # Debian and Ubuntu install ACE libraries in their multiarch libdir (for
+    # example, /usr/lib/x86_64-linux-gnu). Use ACE.pc when available so this
+    # also works with CMake cache entries created without compiler metadata.
+    find_package(PkgConfig QUIET)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(PC_ACE QUIET ACE)
+    endif()
+
+    # Some Ubuntu ACE.pc files report /usr/lib even though the package puts
+    # libACE.so in the Debian multiarch directory. Recover that directory when
+    # an older or externally-created CMake cache has no architecture metadata.
+    execute_process(
+        COMMAND dpkg-architecture -qDEB_HOST_MULTIARCH
+        OUTPUT_VARIABLE DEB_HOST_MULTIARCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+
     FIND_PATH(ACE_INCLUDE_DIR
     NAMES
       ace/ACE.h
-    PATHS
+    HINTS
+      ${PC_ACE_INCLUDE_DIRS}
+      PATHS
       /usr/include
       /usr/include/ace
       /usr/local/include
@@ -31,7 +50,13 @@ if (UNIX)
     FIND_LIBRARY(ACE_LIBRARIES
     NAMES
       ace ACE
+    HINTS
+      ${PC_ACE_LIBRARY_DIRS}
     PATHS
+      /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}
+      /lib/${CMAKE_LIBRARY_ARCHITECTURE}
+      /usr/lib/${DEB_HOST_MULTIARCH}
+      /lib/${DEB_HOST_MULTIARCH}
       /usr/lib
       /usr/lib/ace
       /usr/local/lib
