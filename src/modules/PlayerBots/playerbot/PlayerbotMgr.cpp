@@ -851,6 +851,10 @@ std::string PlayerbotHolder::ProcessBotCommand(std::string cmd, ObjectGuid guid,
         cmd = cmd.substr(0, eqPos);
     }
 
+    if (!isRandomAccount && isMasterAccount && guid != masterguid && !sPlayerbotAIConfig.allowOwnAccountAltBots &&
+        !admin && masterguid && (cmd == "add" || cmd == "login"))
+        return "Adding your own account alts as bots is disabled";
+
     auto it = m_botCommandHandlers.find(cmd);
     if (it != m_botCommandHandlers.end())
     {

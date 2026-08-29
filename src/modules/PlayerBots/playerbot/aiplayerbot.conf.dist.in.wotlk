@@ -821,6 +821,10 @@ AiPlayerbot.AllowGuildBots = 1
 # Allow/deny bots from other player accounts (must have AiPlayerbot.AllowGuildBots activated and character on same guild)
 AiPlayerbot.AllowMultiAccountAltBots = 1
 
+# Allow/deny players from adding their own account alts as bots
+# This does not affect random bots or GM commands
+AiPlayerbot.AllowOwnAccountAltBots = 1
+
 # Delay between two short-time spells cast (Default 500)
 AiPlayerbot.GlobalCooldown = 1500
 
