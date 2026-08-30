@@ -1,0 +1,90 @@
+# syntax=docker/dockerfile:1.7
+# Tortoise WoW client-data extractor image.
+# The image is intentionally separate from the server image: it contains the
+# build/runtime dependencies for the four one-shot extractor tools only.
+
+ARG UBUNTU_VERSION=22.04
+
+# -----------------------------------------------------------------------------
+# Builder
+# -----------------------------------------------------------------------------
+FROM ubuntu:${UBUNTU_VERSION} AS builder
+
+ARG BUILD_JOBS=22
+ARG CPU_TARGET=x86-64-v2
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+        libace-dev \
+        libboost-all-dev \
+        default-libmysqlclient-dev \
+        libssl-dev \
+        zlib1g-dev \
+        libbz2-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src/tortoise-wow
+COPY . .
+
+# Do not make the published extractor image depend on the CPU that built it.
+RUN if grep -q -- '-march=native' CMakeLists.txt; then \
+        sed -i "s/-march=native/-march=${CPU_TARGET}/g" CMakeLists.txt; \
+    fi \
+    && if grep -q -- '-march=native' CMakeLists.txt; then \
+         echo "CMakeLists.txt still contains -march=native" >&2; \
+         exit 1; \
+       fi
+
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_PLAYERBOTS=OFF \
+        -DMODULE_MOD_DYNAMIC_XP=static \
+        -DUSE_EXTRACTORS=ON \
+        -DALLOW_TURTLE_ADDONS=ON \
+    && cmake --build build --parallel "${BUILD_JOBS}" \
+        --target mapextractor vmapextractor vmap_assembler MoveMapGen \
+    && mkdir -p /opt/turtle-extractors/bin \
+    && cp build/tools/extractor/mapextractor /opt/turtle-extractors/bin/ \
+    && cp build/tools/vmap_extractor/vmapextract/vmapextractor /opt/turtle-extractors/bin/ \
+    && cp build/tools/vmap_assembler/vmap_assembler /opt/turtle-extractors/bin/ \
+    && cp build/tools/mmap/MoveMapGen /opt/turtle-extractors/bin/
+
+# -----------------------------------------------------------------------------
+# Runtime
+# -----------------------------------------------------------------------------
+FROM ubuntu:${UBUNTU_VERSION}
+
+ARG ACE_RUNTIME_PACKAGE=libace-7.0.6
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    CLIENT_DIR=/client \
+    OUTPUT_DIR=/output \
+    PATH=/opt/turtle-extractors/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# This image currently targets Ubuntu 22.04, whose ACE runtime package is
+# libace-7.0.6. Override UBUNTU_VERSION together with ACE_RUNTIME_PACKAGE if
+# building this Dockerfile for another Ubuntu release.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ${ACE_RUNTIME_PACKAGE} \
+        libbz2-1.0 \
+        libgcc-s1 \
+        libstdc++6 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/turtle-extractors/bin /tmp \
+    && chmod 1777 /tmp
+
+COPY --from=builder /opt/turtle-extractors/bin/ /opt/turtle-extractors/bin/
+COPY docker/extractors-entrypoint.sh /usr/local/bin/extractors-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/extractors-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/extractors-entrypoint.sh"]

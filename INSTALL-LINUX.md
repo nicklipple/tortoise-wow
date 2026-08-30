@@ -69,6 +69,47 @@ Binaries land in `<prefix>/bin`, configs in `<prefix>/etc`.
 
 ## 4. Extract the client data
 
+### Docker extractor image
+
+The extractor image keeps ACE and the other runtime libraries inside Docker, so
+the host only needs Docker and a read-only mount of the client. Build it from
+the repository root:
+
+```bash
+docker build -f Dockerfile.extractors -t tortoise-wow-extractors .
+```
+
+The Dockerfile defaults to Ubuntu 22.04. If you override that base, also set
+`ACE_RUNTIME_PACKAGE` to the matching Ubuntu ACE runtime package.
+
+Create an output directory, then run the complete pipeline. The client mount
+must be the client root, the directory containing `Data/`:
+
+```bash
+mkdir -p ./client-data-extracted
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v /path/to/TurtleWoW:/client:ro \
+  -v "$PWD/client-data-extracted:/output" \
+  tortoise-wow-extractors
+```
+
+The entrypoint runs `mapextractor`, `vmapextractor`, `vmap_assembler`, and
+`MoveMapGen` in order. It writes `dbc/`, `maps/`, `vmaps/`, and `mmaps/` to the
+host output directory; intermediate `Buildings/` data stays inside the
+container. Use `--clean` to replace those four directories on a repeat run.
+Any other arguments are passed to `MoveMapGen`, for example:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v /path/to/TurtleWoW:/client:ro \
+  -v "$PWD/client-data-extracted:/output" \
+  tortoise-wow-extractors --clean --quick
+```
+
+### Native binaries
+
 Run the tools from `build/` inside your **client** directory:
 
 1. `mapextractor` — produces `dbc` and `maps`
