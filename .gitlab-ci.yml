@@ -1,10 +1,12 @@
 stages:
   - build
+  - deploy
 
 image: docker:latest
 
 variables:
   DOCKER_BUILDKIT: "1"
+  TORTOISE_DEPLOY_CONFIG_DIR: "/etc/tortoise-wow"
 
 build-images:
   stage: build
@@ -31,3 +33,63 @@ build-images:
           docker push "${CI_REGISTRY_IMAGE}/extractors:${tag}"
         done
       fi
+
+.deploy-dev:
+  stage: deploy
+  image: docker:latest
+  tags:
+    - tortoise-deploy
+  needs:
+    - job: build-images
+      artifacts: false
+  when: manual
+  allow_failure: true
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+  script:
+    - |
+      set -eu
+
+      config_file="${TORTOISE_DEPLOY_CONFIG_DIR}/${DEPLOY_ENV}.env"
+      test -r "${config_file}"
+
+      set -a
+      . "${config_file}"
+      set +a
+
+      : "${COMPOSE_FILE:?COMPOSE_FILE is required in ${config_file}}"
+      : "${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required in ${config_file}}"
+      : "${DATA_PATH:?DATA_PATH is required in ${config_file}}"
+      test -f "${COMPOSE_FILE}"
+      test -d "${DATA_PATH}"
+      for artifact in dbc maps vmaps mmaps; do
+        test -d "${DATA_PATH}/${artifact}"
+      done
+
+      export TURTLE_IMAGE="${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+      compose() {
+        docker compose \
+          --project-name "${COMPOSE_PROJECT_NAME}" \
+          --env-file "${config_file}" \
+          --file "${COMPOSE_FILE}" "$@"
+      }
+
+      compose config --quiet
+      compose pull
+      compose up -d --remove-orphans
+
+deploy-dev-1:
+  extends: .deploy-dev
+  variables:
+    DEPLOY_ENV: dev-1
+  environment:
+    name: dev-1
+  resource_group: dev-1
+
+deploy-dev-2:
+  extends: .deploy-dev
+  variables:
+    DEPLOY_ENV: dev-2
+  environment:
+    name: dev-2
+  resource_group: dev-2
