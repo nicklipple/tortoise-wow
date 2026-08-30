@@ -1,0 +1,49 @@
+name: Sync to GitLab
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-to-gitlab
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror repository to GitLab
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_REPO: ${{ secrets.GITLAB_REPO }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${GITLAB_REPO:?Set the GITLAB_REPO secret to the GitLab repository URL or path}"
+          : "${GITLAB_TOKEN:?Set the GITLAB_TOKEN secret to a GitLab push token}"
+
+          git clone --mirror \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            mirror.git
+
+          case "${GITLAB_REPO}" in
+            https://*) gitlab_url="${GITLAB_REPO}" ;;
+            git@gitlab.com:*) gitlab_url="https://gitlab.com/${GITLAB_REPO#git@gitlab.com:}" ;;
+            *) gitlab_url="https://gitlab.com/${GITLAB_REPO}" ;;
+          esac
+          gitlab_url="${gitlab_url%.git}.git"
+
+          auth="$(printf 'oauth2:%s' "${GITLAB_TOKEN}" | base64 -w0)"
+          git -C mirror.git remote add gitlab "${gitlab_url}"
+          # Do not use --mirror or --prune: GitLab-only branches and tags must
+          # survive when refs are removed from GitHub.
+          git -C mirror.git \
+            -c "http.extraHeader=Authorization: Basic ${auth}" \
+            push gitlab \
+            'refs/heads/*:refs/heads/*' \
+            'refs/tags/*:refs/tags/*'
