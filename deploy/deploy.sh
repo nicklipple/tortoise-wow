@@ -75,7 +75,6 @@ set +a
 : "${COMPOSE_FILE:?COMPOSE_FILE is required in $config_file}"
 : "${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required in $config_file}"
 : "${DATA_PATH:?DATA_PATH is required in $config_file}"
-: "${DEPLOY_LOCK_DIR:?DEPLOY_LOCK_DIR is required in $config_file}"
 
 case "$COMPOSE_FILE" in
   /*) ;;
@@ -91,18 +90,6 @@ esac
 for artifact in dbc maps vmaps mmaps; do
   [ -d "${DATA_PATH}/${artifact}" ] || die "missing client data directory: ${DATA_PATH}/${artifact}"
 done
-
-mkdir -p "$DEPLOY_LOCK_DIR"
-lock_path="${DEPLOY_LOCK_DIR}/${env_name}.lock"
-if ! mkdir "$lock_path" 2>/dev/null; then
-  die "${env_name} is already being deployed (lock: ${lock_path})"
-fi
-cleanup() {
-  rm -f "${lock_path}/pid"
-  rmdir "$lock_path" 2>/dev/null || true
-}
-trap cleanup EXIT
-printf '%s\n' "$$" > "${lock_path}/pid"
 
 if [ "$build_local" -eq 1 ]; then
   script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
