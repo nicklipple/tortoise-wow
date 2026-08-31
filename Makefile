@@ -21,6 +21,14 @@ MODULE_MOD_DYNAMIC_XP ?= static
 ALLOW_TURTLE_ADDONS ?= ON
 BUILD_JOBS ?= $(shell nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 1)
 
+# `make deploy dev-1` is supported as a convenience; `make deploy
+# DEPLOY_ENV=dev-1` is equivalent and avoids Make treating dev-1 as a target.
+DEPLOY_GOAL_ENV := $(filter dev-1 dev-2,$(MAKECMDGOALS))
+DEPLOY_ENV ?= $(ENV)
+ifeq ($(strip $(DEPLOY_ENV)),)
+DEPLOY_ENV := $(firstword $(DEPLOY_GOAL_ENV))
+endif
+
 # ccache is used when it is installed, but is not required for local builds.
 CCACHE ?= ccache
 USE_CCACHE ?= auto
@@ -53,7 +61,7 @@ CMAKE_ARGS += -DCMAKE_C_COMPILER_LAUNCHER="$(CCACHE)" \
 	-DCMAKE_CXX_COMPILER_LAUNCHER="$(CCACHE)"
 endif
 
-.PHONY: all install-deps configure build install extractors extractors-only clean help
+.PHONY: all install-deps configure build install extractors extractors-only clean deploy deploy-dev-1 deploy-dev-2 dev-1 dev-2 help
 
 all: install
 
@@ -98,6 +106,20 @@ extractors-only: extractors
 clean:
 	$(CMAKE) -E rm -rf "$(BUILD_DIR)"
 
+deploy:
+	@test -n "$(DEPLOY_ENV)" || (printf '%s\n' 'Usage: make deploy ENV=dev-1' '       make deploy dev-1'; exit 2)
+	sh deploy/deploy.sh --env "$(DEPLOY_ENV)" --build-local
+
+deploy-dev-1:
+	@$(MAKE) --no-print-directory deploy DEPLOY_ENV=dev-1
+
+deploy-dev-2:
+	@$(MAKE) --no-print-directory deploy DEPLOY_ENV=dev-2
+
+# Allow `make deploy dev-1` without making the environment target do work.
+dev-1 dev-2:
+	@:
+
 help:
 	@printf '%s\n' \
 		'Available targets:' \
@@ -109,6 +131,9 @@ help:
 		'  extractors      Build mapextractor, vmapextractor, vmap_assembler, and MoveMapGen' \
 		'  extractors-only Build extractors and copy them to the install prefix' \
 		'  clean           Remove the CMake build tree' \
+		'  deploy          Build the local WIP image and deploy it (ENV=dev-1 or dev-2)' \
+		'  deploy-dev-1    Build and deploy the local WIP image to dev-1' \
+		'  deploy-dev-2    Build and deploy the local WIP image to dev-2' \
 		'' \
 		'Override BUILD_JOBS, CMAKE_BUILD_TYPE, CMAKE_INSTALL_PREFIX, BUILD_PLAYERBOTS,' \
 		'USE_EXTRACTORS, MODULE_MOD_DYNAMIC_XP, ALLOW_TURTLE_ADDONS, ACE_ROOT, or USE_CCACHE.'
