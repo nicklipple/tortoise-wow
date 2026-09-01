@@ -7,12 +7,39 @@
 x-turtle-image: &turtle-image ${TURTLE_IMAGE:-ghcr.io/kasperfriend/tortoise-docker:${TAG:-playerbots}}
 
 services:
+   wowchat:
+    image: registry.gitlab.com/cavillis/wowchat:latest
+    container_name: wowchat
+    restart: unless-stopped
+
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      WOW_ACCOUNT: ${WOW_ACCOUNT}
+      WOW_PASSWORD: ${WOW_PASSWORD}
+      WOW_CHARACTER: ${WOW_CHARACTER}
+
+    volumes:
+      - ./wowchat-config/wowchat.conf:/app/wowchat.conf:ro
   mangos-web:
     image: ${MANGOS_WEB_IMAGE:-registry.gitlab.com/cavillis/mangos-web:latest}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      MANGOS_WEB_ADDRESS: "${MANGOS_WEB_ADDRESS:-:8080}"
+      MANGOS_WEB_READ_TIMEOUT: "${MANGOS_WEB_READ_TIMEOUT:-10s}"
+      MANGOS_WEB_WRITE_TIMEOUT: "${MANGOS_WEB_WRITE_TIMEOUT:-10s}"
+      MANGOS_WEB_IDLE_TIMEOUT: "${MANGOS_WEB_IDLE_TIMEOUT:-60s}"
+      MANGOS_WEB_SECURE_COOKIES: "${MANGOS_WEB_SECURE_COOKIES:-false}"
+
+      # MariaDB uses the same credentials as the Mangos services.
+      MANGOS_WEB_DB_HOST: "${MANGOS_WEB_DB_HOST:-db}"
+      MANGOS_WEB_DB_PORT: "${MANGOS_WEB_DB_PORT:-3306}"
+      MANGOS_WEB_DB_NAME: "${DB_LOGIN:-tw_logon}"
+      MANGOS_WEB_DB_USER: "${DB_USER:-mangos}"
+      MANGOS_WEB_DB_PASSWORD: "${DB_PASSWORD:?set DB_PASSWORD in .env}"
     ports:
       - "${WEB_BIND_IP:-0.0.0.0}:${WEB_PORT:-8484}:8080"
-    volumes:
-      - ${WEB_CONFIG_PATH:-/home/media/config/mangos-web/config.json}:/app/config.json:ro
   db:
     image: ${MARIADB_IMAGE:-mariadb:11.8@sha256:d9f7eb2637296652f24b484afd5d246f759f49f5babcadc6a9e344c9acb75fbf}
     restart: unless-stopped
