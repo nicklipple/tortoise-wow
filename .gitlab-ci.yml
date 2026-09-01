@@ -64,3 +64,14 @@ deploy-dev-2:
   environment:
     name: dev-2
   resource_group: dev-2
+
+deploy-prod:
+  extends: .deploy-dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      when: manual
+  variables:
+    DEPLOY_ENV: prod
+  environment:
+    name: prod
+  resource_group: prod

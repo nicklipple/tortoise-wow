@@ -4,8 +4,8 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  deploy.sh --env <dev-1|dev-2> --image <image> [--pull]
-  deploy.sh --env <dev-1|dev-2> --build-local
+  deploy.sh --env <dev-1|dev-2|prod> --image <image> [--pull]
+  deploy.sh --env <dev-1|dev-2|prod> --build-local
 EOF
 }
 
@@ -51,9 +51,13 @@ done
 
 [ -n "$env_name" ] || die '--env is required'
 case "$env_name" in
-  dev-1|dev-2) ;;
+  dev-1|dev-2|prod) ;;
   *) die "unsupported environment: $env_name" ;;
 esac
+
+if [ "$env_name" = "prod" ] && [ "${CI_COMMIT_BRANCH:-}" != "master" ]; then
+  die 'prod deployments are only allowed from master'
+fi
 
 if [ "$build_local" -eq 1 ] && [ -n "$image" ]; then
   die '--build-local and --image cannot be used together'
