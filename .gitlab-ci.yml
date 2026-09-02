@@ -2,6 +2,7 @@ stages:
   - build
   - deploy
 
+# Configure DISCORD_WEBHOOK as a masked GitLab CI/CD variable.
 image: docker:latest
 
 variables:
@@ -45,9 +46,13 @@ build-images:
   when: manual
   allow_failure: true
   before_script:
+    - apk add --no-cache ca-certificates curl git jq
+    - sh deploy/discord-notify.sh started
     - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
   script:
     - sh deploy/deploy.sh --env "$DEPLOY_ENV" --image "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" --pull
+  after_script:
+    - sh deploy/discord-notify.sh "${CI_JOB_STATUS:-unknown}"
 
 deploy-dev-1:
   extends: .deploy-dev
