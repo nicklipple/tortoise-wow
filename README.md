@@ -2,7 +2,7 @@
 # Tortoise-WoW
 
 This is an unofficial, community driven, restoration of the 1.18.1 patch of Turtle-WoW, with some additions for solo play.  
-This project is not to be used for profit or to misrepresent itself, or anyone using it, as the original creators  
+This project is not to be used for profit or to misrepresent itself, or anyone using it, as the original creators.  
 This project targets version 1.18.1 build 7272
 
 ## About this fork
