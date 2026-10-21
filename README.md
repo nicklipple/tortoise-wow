@@ -128,7 +128,7 @@ build it with Nix.
 Everything below is upstream's own documentation and applies to this fork as well.
 ## Client Version
 
-The client version targetted is patch 1.18.1, build 7272  
+The client version targeted is patch 1.18.1, build 7272  
 Any client that does not match this version or build will likely have a myriad of issues
 
 ## Additions
